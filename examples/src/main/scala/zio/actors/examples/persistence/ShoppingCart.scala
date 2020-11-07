@@ -117,12 +117,12 @@ object ShoppingCart {
         else
           UIO((Command.ignore, _ => Rejected(s"Cannot adjust quantity for item '$itemId'. Item not present on cart")))
 
-      case Checkout                             =>
+      case Checkout =>
         if (state.isEmpty)
           UIO((Command.ignore, _ => Rejected("Cannot checkout an empty shopping cart")))
         else
           UIO((Command.persist(CheckedOut(cartId, Instant.now())), updatedCart => Accepted(updatedCart.toSummary)))
-      case Get                                  =>
+      case Get      =>
         UIO((Command.ignore, _ => state.toSummary))
     }
 

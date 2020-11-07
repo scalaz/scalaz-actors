@@ -42,11 +42,24 @@ lazy val root =
   project
     .in(file("."))
     .settings(skip in publish := true)
-    .aggregate(zioActors, zioActorsPersistence, zioActorsPersistenceJDBC, examples, zioActorsAkkaInterop)
+    .aggregate(
+      zioActorsJS,
+      zioActorsJVM,
+      zioActorsPersistence,
+      zioActorsPersistenceJDBC,
+      examples,
+      zioActorsAkkaInterop
+    )
 
-lazy val zioActors = module("zio-actors", "actors")
-  .enablePlugins(BuildInfoPlugin)
+lazy val zioActors = crossProject(JSPlatform, JVMPlatform)
+  .in(file("actors"))
+  .settings(stdSettings("zio-actors"))
   .settings(buildInfoSettings("zio.actors"))
+  .enablePlugins(BuildInfoPlugin)
+  .jvmConfigure(_.withId("zio-actors-jvm"))
+  .jsConfigure(_.withId("zio-actors-js"))
+
+lazy val zioActorsJVM = zioActors.jvm
   .settings(
     libraryDependencies ++= Seq(
       "dev.zio"       %% "zio"                 % zioVersion,
@@ -58,8 +71,13 @@ lazy val zioActors = module("zio-actors", "actors")
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
+
+lazy val zioActorsJS = zioActors.js
   .settings(
-    stdSettings("zio-actors")
+    libraryDependencies ++= Seq(
+      "dev.zio" %% "zio"                 % zioVersion,
+      "dev.zio" %% "zio-config-typesafe" % zioConfigVersion
+    )
   )
 
 lazy val zioActorsPersistence = module("zio-actors-persistence", "persistence")
@@ -70,7 +88,7 @@ lazy val zioActorsPersistence = module("zio-actors-persistence", "persistence")
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
-  .dependsOn(zioActors)
+  .dependsOn(zioActorsJVM)
 
 lazy val zioActorsPersistenceJDBC = module("zio-actors-persistence-jdbc", "persistence-jdbc")
   .settings(
@@ -96,7 +114,7 @@ lazy val examples = module("zio-actors-examples", "examples")
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
-  .dependsOn(zioActors, zioActorsPersistence, zioActorsPersistenceJDBC)
+  .dependsOn(zioActorsJVM, zioActorsPersistence, zioActorsPersistenceJDBC)
 
 lazy val zioActorsAkkaInterop = module("zio-actors-akka-interop", "akka-interop")
   .settings(
@@ -107,7 +125,7 @@ lazy val zioActorsAkkaInterop = module("zio-actors-akka-interop", "akka-interop"
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
-  .dependsOn(zioActors)
+  .dependsOn(zioActorsJVM)
 
 def module(moduleName: String, fileName: String): Project =
   Project(moduleName, file(fileName))
@@ -134,5 +152,5 @@ lazy val docs = project
     docusaurusCreateSite := docusaurusCreateSite.dependsOn(unidoc in Compile).value,
     docusaurusPublishGhpages := docusaurusPublishGhpages.dependsOn(unidoc in Compile).value
   )
-  .dependsOn(zioActors, zioActorsPersistence, zioActorsAkkaInterop)
+  .dependsOn(zioActorsJVM, zioActorsPersistence, zioActorsAkkaInterop)
   .enablePlugins(MdocPlugin, DocusaurusPlugin, ScalaUnidocPlugin)

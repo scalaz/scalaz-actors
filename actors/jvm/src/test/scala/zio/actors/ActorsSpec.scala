@@ -141,10 +141,10 @@ object ActorsSpec extends DefaultRunnableSpec {
         }
         for {
           system <- ActorSystem("test1")
-          actor <- system.make("actor1", Supervisor.none, (), handler)
-          _     <- actor ! Letter
-          _     <- actor ? Letter
-          dump  <- actor.stop
+          actor  <- system.make("actor1", Supervisor.none, (), handler)
+          _      <- actor ! Letter
+          _      <- actor ? Letter
+          dump   <- actor.stop
         } yield assert(dump)(
           isSubtype[List[_]](anything) &&
             hasField[List[_], Int]("size", _.size, equalTo(0))
@@ -164,7 +164,7 @@ object ActorsSpec extends DefaultRunnableSpec {
             }
         }
         for {
-          system <- ActorSystem("test5")
+          system    <- ActorSystem("test5")
           _         <- system.make("actor1-1", Supervisor.none, (), handler)
           actor     <- system.select[Message]("zio://test5@0.0.0.0:0000/actor1-1")
           _         <- actor ! Tick

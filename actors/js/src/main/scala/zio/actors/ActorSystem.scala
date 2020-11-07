@@ -1,15 +1,12 @@
 package zio.actors
 
-import java.io.{ ByteArrayInputStream, ByteArrayOutputStream, File, ObjectInputStream, ObjectOutputStream }
-import java.nio.ByteBuffer
+import java.io._
 
-import zio.{ Chunk, IO, Promise, RIO, Ref, Task, UIO, ZIO }
 import zio.actors.Actor.{ AbstractStateful, Stateful }
 import zio.actors.ActorSystemUtils._
 import zio.actors.ActorsConfig._
 import zio.clock.Clock
-import zio.nio.core.{ Buffer, InetAddress, SocketAddress }
-import zio.nio.core.channels.{ AsynchronousServerSocketChannel, AsynchronousSocketChannel }
+import zio.{ Supervisor => _, _ }
 
 import scala.io.Source
 
@@ -33,9 +30,6 @@ object ActorSystem {
       config          <- retrieveConfig(configFile)
       remoteConfig    <- retrieveRemoteConfig(sysName, config)
       actorSystem     <- IO.effect(new ActorSystem(sysName, config, remoteConfig, initActorRefMap, parentActor = None))
-      _               <- IO
-                           .effectTotal(remoteConfig)
-                           .flatMap(_.fold[Task[Unit]](IO.unit)(c => actorSystem.receiveLoop(c.addr, c.port)))
     } yield actorSystem
 }
 
@@ -131,7 +125,7 @@ final class ActorSystem private[actors] (
     for {
       map          <- refActorMap.get
       finalName    <- buildFinalName(parentActor.getOrElse(""), actorName)
-      _            <- if (map.contains(finalName)) IO.fail(new Exception(s"Actor $finalName already exists")) else IO.unit
+      _            <- IO.fail(new Exception(s"Actor $finalName already exists")).when(map.contains(finalName))
       path          = buildPath(actorSystemName, finalName, remoteConfig)
       derivedSystem = new ActorSystem(actorSystemName, config, remoteConfig, refActorMap, Some(finalName))
       childrenSet  <- Ref.make(Set.empty[ActorRef[Any]])
@@ -172,11 +166,7 @@ final class ActorSystem private[actors] (
                                   }
                     } yield actorRef
                   else
-                    for {
-                      address  <- InetAddress
-                                    .byName(addr.value)
-                                    .flatMap(iAddr => SocketAddress.inetSocketAddress(iAddr, port.value))
-                    } yield new ActorRefRemote[F](path, address)
+                    IO.fail(new Exception(s"Remote ActorSystem not supported."))
     } yield actorRef
 
   /**
@@ -200,58 +190,6 @@ final class ActorSystem private[actors] (
       children            <- childrenRef.get
       _                   <- ZIO.foreach_(children)(_.stop)
       _                   <- childrenRef.set(Set.empty)
-    } yield ()
-
-  private def receiveLoop(address: ActorsConfig.Addr, port: ActorsConfig.Port): Task[Unit] =
-    for {
-      addr      <- InetAddress.byName(address.value)
-      address   <- SocketAddress.inetSocketAddress(addr, port.value)
-      p         <- Promise.make[Nothing, Unit]
-      channel   <- AsynchronousServerSocketChannel()
-      loopEffect = for {
-                     _ <- channel.bind(address)
-
-                     _ <- p.succeed(())
-
-                     loop = for {
-                              worker          <- channel.accept
-                              obj             <- readFromWire(worker)
-                              envelope         = obj.asInstanceOf[Envelope]
-                              actorMap        <- refActorMap.get
-                              remoteActorPath <- resolvePath(envelope.recipient).map(_._4)
-                              _               <- actorMap.get(remoteActorPath) match {
-                                                   case Some(value) =>
-                                                     for {
-                                                       actor    <-
-                                                         IO
-                                                           .effect(value.asInstanceOf[Actor[Any]])
-                                                           .mapError(throwable =>
-                                                             new Exception(s"System internal exception - ${throwable.getMessage}")
-                                                           )
-                                                       response <- actor.unsafeOp(envelope.command).either
-                                                       _        <- response match {
-                                                                     case Right(
-                                                                           stream: zio.stream.ZStream[
-                                                                             Any @unchecked,
-                                                                             Throwable @unchecked,
-                                                                             Any @unchecked
-                                                                           ]
-                                                                         ) =>
-                                                                       stream.foreach(writeToWire(worker, _))
-                                                                     case _ => writeToWire(worker, response)
-                                                                   }
-                                                     } yield ()
-                                                   case None        =>
-                                                     for {
-                                                       responseError <- IO.fail(new Exception("No such remote actor")).either
-                                                       _             <- writeToWire(worker, responseError)
-                                                     } yield ()
-                                                 }
-                            } yield ()
-                     _   <- loop.forever
-                   } yield ()
-      _         <- loopEffect.onTermination(_ => channel.close.catchAll(_ => ZIO.unit)).fork
-      _         <- p.await
     } yield ()
 }
 
@@ -304,17 +242,6 @@ private[actors] object ActorSystemUtils {
       Task(s.readObject())
     }
 
-  def readFromWire(socket: AsynchronousSocketChannel): Task[Any] =
-    for {
-      size      <- socket.read(4)
-      buffer    <- Buffer.byte(size)
-      intBuffer <- buffer.asIntBuffer
-      toRead    <- intBuffer.get(0)
-      content   <- socket.read(toRead)
-      bytes      = content.toArray
-      obj       <- objFromByteArray(bytes)
-    } yield obj
-
   def objToByteArray(obj: Any): Task[Array[Byte]] =
     for {
       stream <- UIO(new ByteArrayOutputStream())
@@ -322,11 +249,4 @@ private[actors] object ActorSystemUtils {
                   Task(s.writeObject(obj)) *> UIO(stream.toByteArray)
                 }
     } yield bytes
-
-  def writeToWire(socket: AsynchronousSocketChannel, obj: Any): Task[Unit] =
-    for {
-      bytes <- objToByteArray(obj)
-      _     <- socket.write(Chunk.fromArray(ByteBuffer.allocate(4).putInt(bytes.size).array()))
-      _     <- socket.write(Chunk.fromArray(bytes))
-    } yield ()
 }

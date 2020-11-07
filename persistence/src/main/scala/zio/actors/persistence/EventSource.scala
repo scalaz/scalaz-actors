@@ -83,19 +83,19 @@ abstract class EventSourcedStateful[R, S, -F[+_], Ev](persistenceId: Persistence
         effectfulCompleter  = (s: S, a: A) => state.set(s) *> promise.succeed(a)
         idempotentCompleter = (a: A) => promise.succeed(a)
         fullCompleter       = (
-                                  (
-                                    ev: Command[Ev],
-                                    sa: S => A
-                                  ) =>
-                                    ev match {
-                                      case Command.Ignore      => idempotentCompleter(sa(s))
-                                      case Command.Persist(ev) =>
-                                        for {
-                                          _           <- journal.persistEvent(persistenceId, ev)
-                                          updatedState = sourceEvent(s, ev)
-                                          res         <- effectfulCompleter(updatedState, sa(updatedState))
-                                        } yield res
-                                    }
+                                (
+                                  ev: Command[Ev],
+                                  sa: S => A
+                                ) =>
+                                  ev match {
+                                    case Command.Ignore      => idempotentCompleter(sa(s))
+                                    case Command.Persist(ev) =>
+                                      for {
+                                        _           <- journal.persistEvent(persistenceId, ev)
+                                        updatedState = sourceEvent(s, ev)
+                                        res         <- effectfulCompleter(updatedState, sa(updatedState))
+                                      } yield res
+                                  }
                               ).tupled
         _                  <- receiver.foldM(
                                 e =>
@@ -113,9 +113,9 @@ abstract class EventSourcedStateful[R, S, -F[+_], Ev](persistenceId: Persistence
       state       <- Ref.make(sourcedState)
       queue       <- Queue.bounded[PendingMessage[F, _]](mailboxSize)
       _           <- (for {
-                         t <- queue.take
-                         _ <- process(t, state, journal)
-                       } yield ()).forever.fork
+                       t <- queue.take
+                       _ <- process(t, state, journal)
+                     } yield ()).forever.fork
     } yield new Actor[F](queue)(optOutActorSystem)
   }
 

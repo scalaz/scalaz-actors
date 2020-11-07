@@ -1,10 +1,9 @@
 package zio.actors
 
-import zio.{ Task, ZIO }
-import zio.config.{ ConfigDescriptor, ZConfig }
+import zio.config.ConfigDescriptor
 import zio.config.ConfigDescriptor._
 import zio.config.typesafe.TypesafeConfig
-import zio.Tag
+import zio.{ Tag, Task, ZIO }
 
 private[actors] object ActorsConfig {
 
@@ -33,7 +32,7 @@ private[actors] object ActorsConfig {
     configDescriptor: ConfigDescriptor[T]
   )(implicit tag: Tag[T]): Task[T] =
     ZIO
-      .access[ZConfig[T]](_.get)
+      .service[T]
       .provideLayer(TypesafeConfig.fromHoconString[T](configStr, selectiveSystemConfig(systemName, configDescriptor)))
 
   def getRemoteConfig(systemName: String, configStr: String): Task[Option[RemoteConfig]] =

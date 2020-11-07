@@ -185,7 +185,7 @@ object ActorsAkkaSpec extends DefaultRunnableSpec {
               }
           }
         for {
-          system <- ActorSystem("test3")
+          system    <- ActorSystem("test3")
           zioActor  <- system.make("actor3", Supervisor.none, 0, handler)
           akkaActor <- AkkaTypedActor.make(typedActorSystem)
           result    <- zioActor ? GetState(akkaActor)
