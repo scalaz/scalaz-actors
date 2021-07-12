@@ -3,31 +3,34 @@ package zio.actors
 import java.io.File
 import java.net.ConnectException
 
-import zio.actors.Actor.Stateful
-import zio.{ clock, console, IO }
-import zio.test.DefaultRunnableSpec
-import zio.test._
-import zio.test.Assertion._
+import zio.actors.Actor.{ ActorResponse, Stateful }
+import zio.actors.SpecUtils._
 import zio.duration._
+import zio.stream.ZStream
+import zio.test.Assertion._
 import zio.test.environment.TestConsole
-import SpecUtils._
+import zio.test.{ DefaultRunnableSpec, _ }
+import zio.{ clock, console, Chunk, IO }
 
 object SpecUtils {
   sealed trait Message[+A]
-  case class Str(value: String) extends Message[String]
+  case class Str(value: String)        extends Message[String]
+  case class Strs(values: Seq[String]) extends Message[ZStream[Any, Nothing, String]]
 
   sealed trait MyErrorDomain extends Throwable
   case object DomainError    extends MyErrorDomain
 
   val handlerMessageTrait = new Stateful[Any, Int, Message] {
-    override def receive[A](
+    override def receiveS[A](
       state: Int,
       msg: Message[A],
       context: Context
-    ): IO[MyErrorDomain, (Int, A)] =
+    ): ActorResponse[Any, Int, A] =
       msg match {
-        case Str(value) =>
+        case Str(value)   =>
           IO.effectTotal((state + 1, value + "received plus " + state + 1))
+        case Strs(values) =>
+          ZStream(values: _*).zipWithIndex.map { case (v, i) => (state + i.toInt, v) }
       }
   }
 
@@ -87,6 +90,8 @@ object RemoteSpec extends DefaultRunnableSpec {
     suite("RemoteSpec")(
       suite("Remote communication suite")(
         testM("Remote test send message") {
+          val messages  = (1 until 10).map(i => s"ZIO-Actor response... $i").toList
+          val messages2 = (11 until 20).map(i => s"ZIO-Actor response... $i").toList
           for {
             actorSystemOne <- ActorSystem("testSystem11", configFile)
             _              <- actorSystemOne.make("actorOne", Supervisor.none, 0, handlerMessageTrait)
@@ -95,7 +100,14 @@ object RemoteSpec extends DefaultRunnableSpec {
                                 "zio://testSystem11@127.0.0.1:9665/actorOne"
                               )
             result         <- actorRef ? Str("ZIO-Actor response... ")
-          } yield assert(result)(equalTo("ZIO-Actor response... received plus 01"))
+            resultStream   <- actorRef ? Strs(messages)
+            resultStream2  <- actorRef ? Strs(messages2)
+            streamVals2    <- resultStream2.runCollect
+            streamVals     <- resultStream.runCollect
+          } yield assert(result)(equalTo("ZIO-Actor response... received plus 01")) &&
+            assert(streamVals)(equalTo(Chunk(messages: _*))) &&
+            assert(streamVals2)(equalTo(Chunk(messages2: _*)))
+
         },
         testM("ActorRef serialization case") {
           for {
@@ -111,7 +123,7 @@ object RemoteSpec extends DefaultRunnableSpec {
 
             _           <- one ! GameInit(remoteActor)
 
-            _ <- clock.sleep(2.seconds)
+            _ <- clock.sleep(3.seconds)
 
             outputVector <- TestConsole.output
           } yield assert(outputVector.size)(equalTo(3)) &&

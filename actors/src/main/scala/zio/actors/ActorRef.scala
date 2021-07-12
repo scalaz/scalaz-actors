@@ -4,7 +4,10 @@ import java.io.{ IOException, ObjectInputStream, ObjectOutputStream, ObjectStrea
 
 import zio.nio.core.{ InetAddress, InetSocketAddress, SocketAddress }
 import zio.nio.core.channels.AsynchronousSocketChannel
-import zio.{ IO, Runtime, Task, UIO }
+import zio.stream.ZStream
+import zio.{ IO, Runtime, Schedule, Task, UIO }
+
+import scala.reflect.ClassTag
 
 /**
  * Reference to actor that might reside on local JVM instance or be available via remote communication
@@ -21,7 +24,7 @@ sealed trait ActorRef[-F[+_]] extends Serializable {
    * @tparam A return type
    * @return effectful response
    */
-  def ?[A](fa: F[A]): Task[A]
+  def ?[A: ClassTag](fa: F[A]): Task[A]
 
   /**
    * Send message to an actor as `fire-and-forget` -
@@ -86,7 +89,7 @@ private[actors] final class ActorRefLocal[-F[+_]](
   private val actorName: String,
   actor: Actor[F]
 ) extends ActorRefSerial[F](actorName) {
-  override def ?[A](fa: F[A]): Task[A] = actor ? fa
+  override def ?[A: ClassTag](fa: F[A]): Task[A] = actor ? fa
 
   override def !(fa: F[_]): Task[Unit] = actor ! fa
 
@@ -111,23 +114,34 @@ private[actors] final class ActorRefRemote[-F[+_]](
 ) extends ActorRefSerial[F](actorName) {
   import ActorSystemUtils._
 
-  override def ?[A](fa: F[A]): Task[A] = sendEnvelope(Command.Ask(fa))
+  override def ?[A: ClassTag](fa: F[A]): Task[A] = sendEnvelope(Command.Ask(fa))
 
   override def !(fa: F[_]): Task[Unit] = sendEnvelope[Unit](Command.Tell(fa))
 
   override val stop: Task[List[_]] = sendEnvelope(Command.Stop)
 
-  private def sendEnvelope[A](command: Command): Task[A] =
+  private def sendEnvelope[A](command: Command)(implicit classTag: ClassTag[A]): Task[A] = {
+    val isZStream = classTag.runtimeClass.isAssignableFrom(classOf[ZStream[_, _, _]])
     for {
       client   <- AsynchronousSocketChannel()
       response <- for {
                     _         <- client.connect(address)
                     actorPath <- path
                     _         <- writeToWire(client, new Envelope(command, actorPath))
-                    response  <- readFromWire(client)
+                    response  <- if (isZStream)
+                                   Task(
+                                     ZStream
+                                       .fromEffect(readFromWire(client))
+                                       .repeat(Schedule.forever)
+                                       .takeUntil(_ == StreamEnd)
+                                       .collect { case StreamMsg(m) => m }
+                                   ).either
+                                 else
+                                   readFromWire(client)
                   } yield response.asInstanceOf[Either[Throwable, A]]
       result   <- IO.fromEither(response)
     } yield result
+  }
 
   @throws[IOException]
   private def writeObject(out: ObjectOutputStream): Unit =

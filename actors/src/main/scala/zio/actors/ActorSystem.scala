@@ -10,6 +10,7 @@ import zio.actors.ActorsConfig._
 import zio.clock.Clock
 import zio.nio.core.{ Buffer, InetAddress, SocketAddress }
 import zio.nio.core.channels.{ AsynchronousServerSocketChannel, AsynchronousSocketChannel }
+import zio.stream.ZStream
 
 import scala.io.Source
 
@@ -237,7 +238,9 @@ final class ActorSystem private[actors] (
                                                                              Any @unchecked
                                                                            ]
                                                                          ) =>
-                                                                       stream.foreach(writeToWire(worker, _))
+                                                                       (stream.map(StreamMsg) ++ ZStream(StreamEnd)).foreach(e =>
+                                                                         writeToWire(worker, e)
+                                                                       )
                                                                      case _ => writeToWire(worker, response)
                                                                    }
                                                      } yield ()
@@ -330,3 +333,7 @@ private[actors] object ActorSystemUtils {
       _     <- socket.write(Chunk.fromArray(bytes))
     } yield ()
 }
+
+sealed trait StreamProtocol
+case class StreamMsg(obj: Any) extends StreamProtocol
+case object StreamEnd          extends StreamProtocol
